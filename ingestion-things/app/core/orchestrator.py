@@ -12,6 +12,7 @@ from typing import List, Dict, Optional, Any, cast
 from datetime import datetime
 import sys
 import os
+import requests
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -35,35 +36,108 @@ class StorageOrchestrator:
         self.builder = DocumentBuilder()
 
         # Embedding model (local, runs on your M4 Mac)
-        print("🧠 Loading embedding model...")
+        print(" Loading embedding model...")
         self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
-        print("   ✅ Model loaded (384 dimensions)")
+        print("Model loaded (384 dimensions)")
 
         # ── Chroma collection references ──────────────────────────────────────
         # Use the same collections ChromaClientLocal created
         self.collections = self.chroma.collections
 
         # ── optional LLM for answer generation ───────────────────────────────
-        self._llm_available = self._init_llm()
+        self.llm_config = self._init_llm()
+        self._llm_available = self.llm_config["available"]
+        self.llm_client = self.llm_config["client"]
 
         print("✅ Orchestrator ready")
         print(f"   Chroma collections: {list(self.collections.keys())}")
-        print(f"   LLM generation: {'✅ enabled' if self._llm_available else '⚠️  disabled (no OPENAI_API_KEY)'}")
+        print(f"LLM client: {self.llm_client.upper() if self._llm_available else 'DISABLED'}")
+        if self._llm_available: 
+            print(f"LLM model: {self.llm_config['model']}")
 
     # =========================================================================
     # LLM SETUP
     # =========================================================================
 
-    def _init_llm(self) -> bool:
-        """Try to load the openai client. Returns True if available."""
-        key = os.getenv("OPENAI_API_KEY")
-        if not key:
-            return False
+    def _init_llm(self) -> Dict[str, Any]:
+        client = os.getenv("LLM_CLIENT", "auto").lower()
+
+        if client in ("ollama", "auto"):
+            if self._check_ollama():
+                return {
+                    "available": True,
+                    "client": "ollama",
+                    "model": os.getenv("OLLAMA_MODEL", "llama3.2"),
+                    "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                }
+            elif client == "ollama":
+                print("Ollama not found")
+    
+        if client in ("groq", "auto"):
+            groq_key = os.getenv("GROQ_API_KEY")
+            if groq_key:
+                return {
+                    "available": True,
+                    "client": "groq",
+                    "model": os.getenv("GROQ_MODEL", "llama-3.2-3b-preview"),
+                    "api_key": groq_key,
+                }
+            
+            return {
+                "available": False,
+                "client": "none",
+                "model": None,
+            }
+
+    def _check_ollama(self) -> bool:
+        """Check if Ollama is running locally."""
         try:
-            import openai  # noqa: F401
-            return True
-        except ImportError:
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            response = requests.get(f"{base_url}/api/tags", timeout=2)
+            return response.status_code == 200
+        except requests.RequestException:
             return False
+
+    def _generate_ollama(self, system_prompt: str, user_prompt:str) -> str:
+        base_url = self.llm_config["base_url"]
+        model = self.llm_config["model"]
+
+        response = requests.post(
+            f"{base_url}/api/generate",
+            json={
+                "model": model, 
+                "system": system_prompt, 
+                "prompt": user_prompt, 
+                "stream": False, 
+                "options": {
+                    "temperature": 0.3,
+                    "num_predict": 500,
+                }
+            },
+            timeout=60
+        )
+        response.raise_for_status()
+        return response.json()["response"].strip()
+    
+    def _generate_groq(self, system_prompt: str, user_prompt: str) -> str:
+        import openai
+        client = openai.OpenAI(
+            api_key=self.llm_config["api_key"],
+            base_url="https://api.groq.com/v1",
+        )
+
+        response = client.chat.completions.create(
+            model=self.llm_config["model"],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=500,
+        )
+        return response.choices[0].message.content.strip()
+
+
 
     def generate_answer(self, question: str, context: str) -> str:
         """
@@ -72,12 +146,11 @@ class StorageOrchestrator:
         """
         if not self._llm_available:
             return (
-                "⚠️  No LLM configured (add OPENAI_API_KEY to .env). "
+                "No LLM configured (add OPENAI_API_KEY to .env). "
                 f"Here is the raw context:\n\n{context}"
             )
 
-        import openai
-
+        
         system_prompt = (
             "You are MetalMind, an expert on heavy metal music. "
             "Answer the user's question using ONLY the context provided. "
@@ -86,20 +159,14 @@ class StorageOrchestrator:
         user_prompt = f"Context:\n{context}\n\nQuestion: {question}"
 
         try:
-            client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=500,
-                temperature=0.3,
-            )
-            return response.choices[0].message.content.strip()
+            if self.llm_client == "ollama": 
+                return self._generate_ollama(system_prompt, user_prompt)
+            elif self.llm_client == "groq":
+                return self._generate_groq(system_prompt, user_prompt)
+            else:
+                return "No LLM configured"
         except Exception as e:
-            return f"LLM error: {e}\n\nRaw context:\n{context}"
-
+            return f"Error generating answer: {str(e)}"
     # =========================================================================
     # INGESTION
     # =========================================================================
