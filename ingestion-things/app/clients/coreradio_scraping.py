@@ -90,76 +90,58 @@ class CoreRadioClient:
     
     def _parse_container(self, container) -> Optional[Dict]:
         """
-        Extract data from a container element
+        Extract data from a container element.
+        The title is in the img alt attribute, e.g.:
+          alt="Magnolia Park - Dangerous [single] (2026)"
         """
         try:
-            text = container.get_text(separator='\n', strip=True)
-            lines = [l.strip() for l in text.split('\n') if l.strip()]
-            
-            if not lines:
-                return None
-            
-            # Debug
-            # print(f"Parsing container with {len(lines)} lines")
-            
-            # Find the title line (usually contains " - " and doesn't start with Genre/Country/Quality)
+            # --- Title from img alt ---
             title = None
             band = None
             album = None
-            
-            for line in lines:
-                # Skip metadata lines
-                if any(line.startswith(x) for x in ['Genre:', 'Country:', 'Quality:', 'Load more', '«', '»']):
-                    continue
-                
-                # Look for "Band - Album" pattern
-                if ' - ' in line or ' – ' in line:
-                    title = line
-                    band, album = self._parse_title(line)
-                    break
-            
-            if not band:
-                return None
-            
-            # Extract metadata
-            genres = []
-            country = None
-            quality = None
-            
-            full_text = ' '.join(lines)
-            
-            # Extract Genre
-            genre_match = re.search(r'Genre:\s*([^\n]+?)(?:\s*Country:|$)', full_text)
-            if genre_match:
-                genre_text = genre_match.group(1).strip()
-                genres = [g.strip() for g in re.split(r'[/,]', genre_text) if g.strip()]
-            
-            # Extract Country
-            country_match = re.search(r'Country:\s*([^\n]+?)(?:\s*Quality:|$)', full_text)
-            if country_match:
-                country = country_match.group(1).strip()
-            
-            # Extract Quality
-            quality_match = re.search(r'Quality:\s*([^\n]+?)(?:\n|$)', full_text)
-            if quality_match:
-                quality = quality_match.group(1).strip()
-            
-            # Get cover image - look for img tags in this container
             cover_url = None
+            post_url = None
+
             img = container.find('img')
             if img:
-                # Prefer data-src (lazy loading) over src
-                cover_url = img.get('data-src') or img.get('src')
-                # Skip placeholder images
-                if cover_url and ('no_image.jpg' in cover_url or 'templates/coredark' in cover_url):
-                    # Try to find a better image - look for spotify or other CDNs
-                    all_imgs = container.find_all('img')
-                    for i in all_imgs:
-                        src = i.get('data-src') or i.get('src')
-                        if src and 'no_image.jpg' not in src and 'templates/coredark' not in src:
-                            cover_url = src
-                            break
-            
+                alt = img.get('alt', '')
+                if alt and (' - ' in alt or ' – ' in alt or ' — ' in alt):
+                    title = alt
+                    band, album = self._parse_title(alt)
+
+                # Cover image: prefer non-placeholder src
+                for i in container.find_all('img'):
+                    src = i.get('data-src') or i.get('src') or ''
+                    if src and 'no_image.jpg' not in src and 'templates/coredark' not in src:
+                        cover_url = src
+                        break
+
+            if not band:
+                return None
+
+            # --- Post URL from anchor ---
+            a = container.find('a', href=True)
+            if a:
+                post_url = a['href']
+
+            # --- Metadata from text (Genre / Country / Quality) ---
+            text_block = container.get_text(separator=' ', strip=True)
+
+            genres = []
+            genre_match = re.search(r'Genre:\s*(.+?)(?:Country:|Quality:|$)', text_block)
+            if genre_match:
+                genres = [g.strip() for g in re.split(r'[/,]', genre_match.group(1)) if g.strip()]
+
+            country = None
+            country_match = re.search(r'Country:\s*(.+?)(?:Quality:|$)', text_block)
+            if country_match:
+                country = country_match.group(1).strip()
+
+            quality = None
+            quality_match = re.search(r'Quality:\s*(.+?)$', text_block)
+            if quality_match:
+                quality = quality_match.group(1).strip()
+
             return {
                 "band": band,
                 "album": album,
@@ -167,10 +149,11 @@ class CoreRadioClient:
                 "country": country,
                 "quality": quality,
                 "cover_url": cover_url,
+                "post_url": post_url,
                 "source": "coreradio",
                 "raw_title": title
             }
-            
+
         except Exception as e:
             print(f"Error parsing container: {e}")
             return None
@@ -250,5 +233,5 @@ if __name__ == "__main__":
         if release['quality']:
             print(f"   Quality: {release['quality']}")
         if release['cover_url']:
-            print(f"   Cover: {release['cover_url'][:80]}...")
+            print(f"   Cover: {release['cover_url']}")
         print()

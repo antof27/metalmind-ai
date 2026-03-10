@@ -28,7 +28,7 @@ class DocumentBuilder:
         formed = band_data.get("formed_year")
         disbanded = band_data.get("disbanded_year")
         bio = band_data.get("biography", "")
-        albums = band_data.get("albums", [])
+        releases = band_data.get("releases", [])
         members = band_data.get("lineup", [])
         
         # Build rich text for embedding
@@ -44,9 +44,9 @@ class DocumentBuilder:
         if bio:
             text_parts.append(f"Biography: {bio[:500]}")
         
-        if albums:
-            album_names = [a.get("title") for a in albums[:10]]
-            text_parts.append(f"Notable releases: {', '.join(album_names)}.")
+        if releases:
+            release_names = [a.get("title") for a in releases[:10]]
+            text_parts.append(f"Notable releases: {', '.join(release_names)}.")
         
         if members:
             member_texts = []
@@ -71,7 +71,7 @@ class DocumentBuilder:
                 "country": country,
                 "formed_year": formed,
                 "disbanded_year": disbanded,
-                "album_count": len(albums),
+                "release_count": len(releases),
                 "member_count": len(members),
                 "reddit_mentions": reddit_mentions,
                 "popularity_score": band_data.get("popularity_score", 0),
@@ -82,39 +82,39 @@ class DocumentBuilder:
         return document
     
     # =========================================================================
-    # ALBUM DOCUMENTS
+    # RELEASE DOCUMENTS
     # =========================================================================
     
-    def build_album_documents(self, band_data: Dict) -> List[Dict]:
+    def build_release_documents(self, band_data: Dict) -> List[Dict]:
         """
-        Create individual documents for each album
+        Create individual documents for each release
         """
         documents = []
         band_name = band_data.get("name")
         band_genres = band_data.get("genres", [])
         
-        for album in band_data.get("albums", []):
-            title = album.get("title")
-            year = album.get("year")
-            album_type = album.get("type", "album")
+        for release in band_data.get("releases", []):
+            title = release.get("title")
+            year = release.get("year")
+            release_type = release.get("type", "Album")
             
-            text = f"{title} is a {album_type} by {band_name}"
+            text = f"{title} is a {release_type} by {band_name}"
             if year:
                 text += f", released in {year}"
             text += f". It is a {' / '.join(band_genres)} release."
             
             doc = {
-                "id": album.get("mbid") or f"{self._slugify(band_name)}-{self._slugify(title)}",
-                "type": "album",
+                "id": release.get("mbid") or f"{self._slugify(band_name)}-{self._slugify(title)}",
+                "type": "release",
                 "text": text,
                 "metadata": {
                     "title": title,
                     "band": band_name,
                     "band_mbid": band_data.get("mbid"),
                     "year": year,
-                    "type": album_type,
+                    "type": release_type,
                     "genres": band_genres,
-                    "cover_url": album.get("cover_url")
+                    "cover_url": release.get("cover_url")
                 }
             }
             documents.append(doc)
@@ -244,9 +244,9 @@ if __name__ == "__main__":
         "country": "SE",
         "formed_year": 1990,
         "biography": "Swedish progressive metal band from Stockholm",
-        "albums": [
-            {"title": "Blackwater Park", "year": 2001, "type": "album"},
-            {"title": "Ghost Reveries", "year": 2005, "type": "album"}
+        "releases": [
+            {"title": "Blackwater Park", "year": 2001, "type": "Album"},
+            {"title": "Ghost Reveries", "year": 2005, "type": "Album"}
         ],
         "lineup": [
             {"name": "Mikael Åkerfeldt", "role": "vocals/guitar", "join_year": 1990},
@@ -257,7 +257,7 @@ if __name__ == "__main__":
     
     # Build all documents
     band_doc = builder.build_band_document(band)
-    album_docs = builder.build_album_documents(band)
+    release_docs = builder.build_release_documents(band)
     member_docs = builder.build_relationship_documents(band)
     
-    print(f"Created {1 + len(album_docs) + len(member_docs)} documents for {band['name']}")
+    print(f"Created {1 + len(release_docs) + len(member_docs)} documents for {band['name']}")

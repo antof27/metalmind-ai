@@ -94,88 +94,119 @@ class UnifiedCollector:
     # STEP 1 — MUSICBRAINZ
     # =========================================================================
 
-    def _collect_musicbrainz(self, band_name: str) -> Dict:
-        """Build base band_data from MusicBrainz."""
-        band_data: Dict = {
-            "name": band_name,
-            "mbid": None,
-            "genres": [],
-            "country": None,
-            "formed_year": None,
-            "disbanded_year": None,
-            "biography": "",
-            "albums": [],
-            "lineup": [],
-            "similar_artists": [],
-            "reddit_posts": [],
-            "reddit_mentions": 0,
-        }
+def _collect_musicbrainz(self, band_name: str) -> Dict:
+    """Build base band_data from MusicBrainz."""
+    band_data: Dict = {
+        "name": band_name,
+        "mbid": None,
+        "genres": [],
+        "country": None,
+        "formed_year": None,
+        "disbanded_year": None,
+        "biography": "",
+        "albums": [],
+        "lineup": [],
+        "similar_artists": [],
+        "reddit_posts": [],
+        "reddit_mentions": 0,
+    }
 
-        try:
-            # Search for the artist
-            results = self.musicbrainz.search_artist(band_name, limit=5)
-            if not results:
-                print(f"   ⚠️  MusicBrainz: no results for '{band_name}'")
-                return band_data
+    try:
+        # Search for the artist
+        results = self.musicbrainz.search_artist(band_name, limit=5)
+        if not results:
+            print(f"   ⚠️  MusicBrainz: no results for '{band_name}'")
+            return band_data
 
-            # Pick the best match by name similarity
-            artist = self._best_match(results, band_name)
-            mbid = artist.get("id")
-            band_data["mbid"] = mbid
+        # Pick the best match by name similarity
+        artist = self._best_match(results, band_name)
+        mbid = artist.get("id")
+        band_data["mbid"] = mbid
 
-            # Fetch full artist details
-            details = self.musicbrainz.get_artist(mbid)
-            band_data["name"] = details.get("name", band_name)
-            band_data["country"] = details.get("country")
+        # Fetch full artist details
+        details = self.musicbrainz.get_artist(mbid)
+        band_data["name"] = details.get("name", band_name)
+        band_data["country"] = details.get("country")
 
-            # Life span
-            lifespan = details.get("life-span", {})
-            begin = lifespan.get("begin", "")
-            end = lifespan.get("end", "")
-            if begin:
-                band_data["formed_year"] = int(begin[:4]) if len(begin) >= 4 else None
-            if end:
-                band_data["disbanded_year"] = int(end[:4]) if len(end) >= 4 else None
+        # Life span
+        lifespan = details.get("life-span", {})
+        begin = lifespan.get("begin", "")
+        end = lifespan.get("end", "")
+        if begin:
+            band_data["formed_year"] = int(begin[:4]) if len(begin) >= 4 else None
+        if end:
+            band_data["disbanded_year"] = int(end[:4]) if len(end) >= 4 else None
 
-            # Tags → genres
-            tags = details.get("tags", [])
-            band_data["genres"] = [
-                t["name"] for t in sorted(tags, key=lambda x: x.get("count", 0), reverse=True)
-                if t.get("count", 0) > 0
-            ][:5]
+        # Tags → genres
+        tags = details.get("tags", [])
+        band_data["genres"] = [
+            t["name"] for t in sorted(tags, key=lambda x: x.get("count", 0), reverse=True)
+            if t.get("count", 0) > 0
+        ][:5]
 
-            # Releases (albums)
-            releases = self.musicbrainz.get_releases(mbid, release_type="album", limit=25)
-            band_data["albums"] = [
-                {
-                    "title": r.get("title"),
-                    "year": int(r.get("date", "0")[:4]) if r.get("date") else None,
-                    "type": "album",
-                    "mbid": r.get("id"),
-                }
-                for r in releases
-            ]
+        # Releases (Albums, EPs, Singles, etc)
+        releases = self.musicbrainz.get_releases(mbid, limit=200)
+        
+        # Identify the proper type of each release
+        exclude_words = ["best of", "collection", "compilation", "greatest hits", "essential", "anthology"]
+        
+        processed_releases = []
+        for r in releases:
+            title = r.get("title", "")
+            primary = r.get("primary-type", "Unknown")
+            secondary = r.get("secondary-types", [])
+            
+            # Determine explicit type
+            if "Compilation" in secondary or any(w in title.lower() for w in exclude_words):
+                rel_type = "Compilation"
+            elif "Live" in secondary or "live" in title.lower():
+                rel_type = "Live"
+            else:
+                rel_type = primary  # "Album", "EP", "Single", etc.
+            
+            # Safer date parsing
+            release_date = r.get("first-release-date", "") or r.get("date", "")
+            year = None
+            if release_date and len(release_date) >= 4 and release_date[:4].isdigit():
+                year = int(release_date[:4])
+            
+            processed_releases.append({
+                "title": title,
+                "year": year,
+                "type": rel_type,
+                "mbid": r.get("id"),
+            })
 
-            # Artist relationships → band members
-            for rel in details.get("relations", []):
-                if rel.get("type") == "member of band" and rel.get("direction") == "backward":
-                    artist_rel = rel.get("artist", {})
-                    attrs = rel.get("attributes", [])
-                    band_data["lineup"].append({
-                        "name": artist_rel.get("name"),
-                        "role": ", ".join(attrs) if attrs else "member",
-                        "join_year": int(rel.get("begin", "0")[:4]) if rel.get("begin") else None,
-                        "leave_year": int(rel.get("end", "0")[:4]) if rel.get("end") else None,
-                    })
+        # Store all releases (if you need them) OR filter to albums only
+        # Option A: Keep all releases separate
+        band_data["releases"] = processed_releases
+        
+        # Option B: Populate albums with actual Album types only (recommended)
+        band_data["albums"] = [r for r in processed_releases if r["type"] == "Album"]
+        
+        # Option C: Include Albums + EPs (common preference)
+        # band_data["albums"] = [r for r in processed_releases if r["type"] in ("Album", "EP")]
 
-            print(f"   ✅ MusicBrainz: {band_data['name']} ({band_data['country']}) "
-                  f"| {len(band_data['albums'])} releases")
+        # Artist relationships → band members
+        for rel in details.get("relations", []):
+            if rel.get("type") == "member of band" and rel.get("direction") == "backward":
+                artist_rel = rel.get("artist", {})
+                attrs = rel.get("attributes", [])
+                band_data["lineup"].append({
+                    "name": artist_rel.get("name"),
+                    "role": ", ".join(attrs) if attrs else "member",
+                    "join_year": int(rel.get("begin", "0")[:4]) if rel.get("begin") else None,
+                    "leave_year": int(rel.get("end", "0")[:4]) if rel.get("end") else None,
+                })
 
-        except Exception as e:
-            print(f"   ❌ MusicBrainz error: {e}")
+        # Fixed: print the correct count
+        print(f"   ✅ MusicBrainz: {band_data['name']} ({band_data['country']}) "
+              f"| {len(band_data['albums'])} albums | {len(band_data.get('releases', []))} total releases")
 
-        return band_data
+    except Exception as e:
+        print(f"   ❌ MusicBrainz error: {e}")
 
+    return band_data
     # =========================================================================
     # STEP 2 — LAST.FM
     # =========================================================================

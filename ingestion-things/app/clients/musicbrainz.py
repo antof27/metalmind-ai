@@ -63,16 +63,15 @@ class MusicBrainzClient:
         }
         return self._get(url, params)
     
-    def get_releases(self, mbid: str, release_type: str = "album", limit: int = 25) -> List[Dict]:
+    def get_releases(self, mbid: str, limit: int = 100) -> List[Dict]:
         """Get discography for an artist"""
-        url = f"{self.base_url}/release"
+        url = f"{self.base_url}/release-group"
         params = {
             "artist": mbid,
-            "type": release_type,
             "limit": limit,
             "fmt": "json"
         }
-        return self._get(url, params).get("releases", [])
+        return self._get(url, params).get("release-groups", [])
     
     def browse_by_tag(self, tag: str, entity_type: str = "artist", limit: int = 25) -> List[Dict]:
         """Browse artists or releases by genre tag"""

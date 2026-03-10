@@ -27,7 +27,7 @@ class LastFMClient:
         print(f"✅ Last.fm client initialized")
     
     def _rate_limit(self):
-        """Last.fm suggests 1 request per second for free tier"""
+        """Last.fm suggests 1 request per second"""
         time.sleep(2)
     
     def _make_request(self, method: str, **params) -> Dict:

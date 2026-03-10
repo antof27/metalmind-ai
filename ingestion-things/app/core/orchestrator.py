@@ -103,11 +103,13 @@ class StorageOrchestrator:
         model = self.llm_config["model"]
 
         response = requests.post(
-            f"{base_url}/api/generate",
+            f"{base_url}/api/chat",
             json={
                 "model": model, 
-                "system": system_prompt, 
-                "prompt": user_prompt, 
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
                 "stream": False, 
                 "options": {
                     "temperature": 0.3,
@@ -117,7 +119,7 @@ class StorageOrchestrator:
             timeout=60
         )
         response.raise_for_status()
-        return response.json()["response"].strip()
+        return response.json()["message"]["content"].strip()
     
     def _generate_groq(self, system_prompt: str, user_prompt: str) -> str:
         import openai
@@ -197,8 +199,8 @@ class StorageOrchestrator:
             band_doc = self.builder.build_band_document(band_data)
             documents.append(("bands", band_doc))
 
-            for doc in self.builder.build_album_documents(band_data):
-                documents.append(("albums", doc))
+            for doc in self.builder.build_release_documents(band_data):
+                documents.append(("releases", doc))
 
             for doc in self.builder.build_relationship_documents(band_data):
                 documents.append(("members", doc))
@@ -242,10 +244,10 @@ class StorageOrchestrator:
                 )
                 result["neo4j_ids"].append({"type": "member", "name": member["name"], "id": mid})
 
-            for album in band_data.get("albums", []):
-                aid = self.neo4j.create_album(band_data.get("mbid"), album)
+            for release in band_data.get("releases", []):
+                aid = self.neo4j.create_release(band_data.get("mbid"), release)
                 if aid:
-                    result["neo4j_ids"].append({"type": "album", "title": album.get("title"), "id": aid})
+                    result["neo4j_ids"].append({"type": "release", "title": release.get("title"), "id": aid})
 
             for genre in band_data.get("genres", []):
                 self.neo4j.connect_genre(band_data.get("mbid"), genre)
@@ -293,7 +295,7 @@ class StorageOrchestrator:
         # ── search each collection ────────────────────────────────────────────
         all_results: List[Dict[str, Any]] = []
 
-        for collection_name in ["bands", "albums", "members", "reddit"]:
+        for collection_name in ["bands", "releases", "members", "reddit"]:
             try:
                 raw = self.collections[collection_name].query(
                     query_embeddings=[query_embedding],
@@ -366,7 +368,7 @@ class StorageOrchestrator:
                     results.append({
                         "name": band_name,
                         "metadata": res["metadatas"][0] if res["metadatas"] else {},
-                        "albums_from_period": band.get("albums_from_period", []),
+                        "releases_from_period": band.get("releases_from_period", []),
                     })
             except Exception:
                 pass
@@ -497,9 +499,9 @@ if __name__ == "__main__":
         "country": "SE",
         "formed_year": 2004,
         "biography": "Swedish progressive metal band known for dark, complex compositions.",
-        "albums": [
-            {"title": "Måsstaden", "year": 2011, "type": "album"},
-            {"title": "Måsstaden under vatten", "year": 2022, "type": "album"},
+        "releases": [
+            {"title": "Måsstaden", "year": 2011, "type": "Album"},
+            {"title": "Måsstaden under vatten", "year": 2022, "type": "Album"},
         ],
         "lineup": [
             {"name": "Daniel Bergström", "role": "vocals", "join_year": 2004},
