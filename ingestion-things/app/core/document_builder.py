@@ -32,7 +32,6 @@ class DocumentBuilder:
         members = band_data.get("lineup", [])
         
         # Build rich text for embedding
-        # This text determines what queries will match!
         text_parts = [
             f"{name} is a {' / '.join(genres)} band from {country}.",
         ]
@@ -87,22 +86,33 @@ class DocumentBuilder:
     
     def build_release_documents(self, band_data: Dict) -> List[Dict]:
         """
-        Create individual documents for each release
+        Create individual documents for each release.
+        Includes album wiki description and track list when available.
         """
         documents = []
         band_name = band_data.get("name")
         band_genres = band_data.get("genres", [])
-        
+
         for release in band_data.get("releases", []):
             title = release.get("title")
             year = release.get("year")
             release_type = release.get("type", "Album")
-            
+
             text = f"{title} is a {release_type} by {band_name}"
             if year:
                 text += f", released in {year}"
             text += f". It is a {' / '.join(band_genres)} release."
-            
+
+            # Enrich with Last.fm album wiki description if available
+            description = release.get("description", "")
+            if description:
+                text += f" {description}"
+
+            # Add track list as context
+            track_list = release.get("track_list", [])
+            if track_list:
+                text += f" Tracks include: {', '.join(t for t in track_list if t)}."
+
             doc = {
                 "id": release.get("mbid") or f"{self._slugify(band_name)}-{self._slugify(title)}",
                 "type": "release",
@@ -114,11 +124,12 @@ class DocumentBuilder:
                     "year": year,
                     "type": release_type,
                     "genres": band_genres,
-                    "cover_url": release.get("cover_url")
+                    "cover_url": release.get("cover_url"),
+                    "has_description": bool(description),
                 }
             }
             documents.append(doc)
-        
+
         return documents
     
     # =========================================================================
@@ -199,6 +210,87 @@ class DocumentBuilder:
         
         return documents
     
+    # =========================================================================
+    # LYRICS DOCUMENTS (Genius)
+    # =========================================================================
+
+    def build_lyrics_documents(self, band_data: Dict) -> List[Dict]:
+        """
+        Create one Chroma document per top track with lyrics snippet.
+        These power queries like:
+          "Which bands write lyrics about war?"
+          "Find songs with dark, nihilistic themes"
+        """
+        documents = []
+        band_name = band_data.get("name", "Unknown")
+        band_mbid = band_data.get("mbid")
+        band_genres = band_data.get("genres", [])
+
+        for track in band_data.get("top_tracks", []):
+            lyrics = track.get("lyrics_snippet", "").strip()
+            if not lyrics:
+                continue
+
+            title = track.get("title", "Unknown")
+            text = (
+                f"{band_name} \u2014 \"{title}\" lyrics:\n{lyrics}"
+            )
+
+            doc = {
+                "id": f"lyrics-{self._slugify(band_name)}-{self._slugify(title)}",
+                "type": "lyrics",
+                "text": text,
+                "metadata": {
+                    "band_name": band_name,
+                    "band_mbid": band_mbid,
+                    "track_title": title,
+                    "genres": band_genres,
+                    "source": "genius",
+                    "url": track.get("url", ""),
+                },
+            }
+            documents.append(doc)
+
+        return documents
+
+    # =========================================================================
+    # SOUND DOCUMENTS (AcousticBrainz)
+    # =========================================================================
+
+    def build_sound_documents(self, band_data: Dict) -> List[Dict]:
+        """
+        Create one Chroma document per track with dense audio embeddings.
+        These power similarity matching queries against songs without LLM semantic encoding.
+        """
+        documents = []
+        band_name = band_data.get("name", "Unknown")
+        band_mbid = band_data.get("mbid")
+        band_genres = band_data.get("genres", [])
+
+        for track in band_data.get("top_tracks", []):
+            embedding = track.get("embedding")
+            if not embedding:
+                continue
+
+            title = track.get("title", "Unknown")
+
+            doc = {
+                "id": f"sound-{self._slugify(band_name)}-{self._slugify(title)}",
+                "type": "sound",
+                "text": f"{band_name} — {title}",
+                "embedding": list(embedding),
+                "metadata": {
+                    "band_name": band_name,
+                    "band_mbid": band_mbid,
+                    "track_title": title,
+                    "genres": band_genres,
+                    "source": "acousticbrainz",
+                },
+            }
+            documents.append(doc)
+
+        return documents
+
     # =========================================================================
     # GENRE/SCENE DOCUMENTS
     # =========================================================================

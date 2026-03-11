@@ -1,6 +1,6 @@
 import time
 import httpx
-from typing import List, Dict
+from typing import List, Dict, Optional
 from httpx import ConnectError, HTTPStatusError
 
 
@@ -51,9 +51,17 @@ class MusicBrainzClient:
         url = f"{self.base_url}/artist"
         params = {"query": name, "limit": limit, "fmt": "json"}
         return self._get(url, params).get("artists", [])
+        
+    def search_recording(self, track_title: str, artist_name: str, limit: int = 1) -> Optional[str]:
+        """Search for a recording MBID by track title and artist name."""
+        url = f"{self.base_url}/recording"
+        query = f'recording:"{track_title}" AND artist:"{artist_name}"'
+        params = {"query": query, "limit": limit, "fmt": "json"}
+        recordings = self._get(url, params).get("recordings", [])
+        if recordings:
+            return recordings[0].get("id")
+        return None
 
-    
-    
     def get_artist(self, mbid: str) -> Dict:
         """Get full artist details by MusicBrainz ID"""
         url = f"{self.base_url}/artist/{mbid}"
@@ -63,16 +71,34 @@ class MusicBrainzClient:
         }
         return self._get(url, params)
     
-    def get_releases(self, mbid: str, limit: int = 100) -> List[Dict]:
-        """Get discography for an artist"""
+    def get_releases(self, mbid: str, types: List[str] = None) -> List[Dict]:
         url = f"{self.base_url}/release-group"
-        params = {
-            "artist": mbid,
-            "limit": limit,
-            "fmt": "json"
-        }
-        return self._get(url, params).get("release-groups", [])
-    
+        all_releases = []
+        offset = 0
+        
+        # Default: only fetch Albums and EPs, ignore singles/promos/etc
+        type_filter = "|".join(types or ["album", "ep", "single"])
+
+        while True:
+            params = {
+                "artist": mbid,
+                "type": type_filter,   # ← filter at API level
+                "limit": 100,
+                "offset": offset,
+                "fmt": "json"
+            }
+            data = self._get(url, params)
+            page = data.get("release-groups", [])
+            all_releases.extend(page)
+
+            total = int(data.get("release-group-count", 0))
+            offset += len(page)
+
+            if offset >= total or not page:
+                break
+
+        return all_releases
+        
     def browse_by_tag(self, tag: str, entity_type: str = "artist", limit: int = 25) -> List[Dict]:
         """Browse artists or releases by genre tag"""
         url = f"{self.base_url}/{entity_type}"

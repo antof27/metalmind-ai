@@ -8,3 +8,7 @@ praw==7.7.1
 beautifulsoup4==4.12.2  
 sentence-transformers    
 neo4j                   
+streamlit               
+plotly                  
+pandas                  
+lyricsgenius            

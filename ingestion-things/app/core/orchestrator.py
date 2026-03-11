@@ -211,13 +211,23 @@ class StorageOrchestrator:
                 ):
                     documents.append(("reddit", doc))
 
+            # NEW — lyrics (Genius) and sound profiles (AcousticBrainz)
+            for doc in self.builder.build_lyrics_documents(band_data):
+                documents.append(("lyrics", doc))
+
+            for doc in self.builder.build_sound_documents(band_data):
+                documents.append(("sounds", doc))
+
             result["documents_created"] = len(documents)
 
             # ── 2. EMBED & STORE IN CHROMA ───────────────────────────────────
             print(f"   📝 Embedding {len(documents)} documents...")
 
             for collection_name, doc in documents:
-                embedding = self.embedder.encode(doc["text"]).tolist()
+                if "embedding" in doc and doc["embedding"]:
+                    embedding = doc["embedding"]
+                else:
+                    embedding = self.embedder.encode(doc["text"]).tolist()
 
                 self.collections[collection_name].upsert(
                     ids=[doc["id"]],
@@ -295,7 +305,7 @@ class StorageOrchestrator:
         # ── search each collection ────────────────────────────────────────────
         all_results: List[Dict[str, Any]] = []
 
-        for collection_name in ["bands", "releases", "members", "reddit"]:
+        for collection_name in ["bands", "releases", "members", "reddit", "lyrics", "sounds"]:
             try:
                 raw = self.collections[collection_name].query(
                     query_embeddings=[query_embedding],

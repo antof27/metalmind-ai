@@ -1,0 +1,15 @@
+# Environment variables (API keys, secrets)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store

@@ -13,10 +13,14 @@ class ChromaClientLocal:
     The orchestrator writes embeddings directly into these collections.
     """
 
-    COLLECTIONS = ["bands", "releases", "members", "reddit", "genres"]
+    COLLECTIONS = ["bands", "releases", "members", "reddit", "genres", "lyrics", "sounds"]
 
     def __init__(self, persist_dir: str = None):
-        self.persist_dir = persist_dir or os.getenv("CHROMA_PATH", "./chroma_data")
+        # Resolve to ingestion-things/chroma_data regardless of the current working directory
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        default_path = os.path.join(base_dir, "chroma_data")
+        
+        self.persist_dir = persist_dir or os.getenv("CHROMA_PATH", default_path)
         self.client = chromadb.PersistentClient(
             path=self.persist_dir,
             settings=Settings(

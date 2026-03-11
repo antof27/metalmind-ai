@@ -1,0 +1,10 @@
+{
+    "python.defaultInterpreterPath": "/opt/homebrew/Caskroom/miniforge/base/envs/metalmind/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "terminal.integrated.env.osx": {
+        "CONDA_DEFAULT_ENV": "metalmind",
+        "PATH": "/opt/homebrew/Caskroom/miniforge/base/envs/metalmind/bin:/opt/homebrew/Caskroom/miniforge/base/bin:${env:PATH}"
+    },
+    "python.condaPath": "/opt/homebrew/Caskroom/miniforge/base/bin/conda"
+}
