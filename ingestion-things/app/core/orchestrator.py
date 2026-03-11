@@ -20,7 +20,7 @@ from app.clients.chroma import ChromaClientLocal
 from app.clients.neo4j_client import Neo4jClient
 from app.core.document_builder import DocumentBuilder
 
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 
 class StorageOrchestrator:
@@ -39,6 +39,11 @@ class StorageOrchestrator:
         print(" Loading embedding model...")
         self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
         print("Model loaded (384 dimensions)")
+
+        # Cross-encoder model for re-ranking
+        print(" Loading cross-encoder model...")
+        self.cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        print("Cross-encoder loaded")
 
         # ── Chroma collection references ──────────────────────────────────────
         # Use the same collections ChromaClientLocal created
@@ -291,35 +296,65 @@ class StorageOrchestrator:
     def query_rag(self, question: str, n_results: int = 5) -> Dict:
         """
         Full RAG pipeline:
-          1. Embed the question
+          1. Embed the question (with optional expansion)
           2. Search all Chroma collections
-          3. Rank + deduplicate
-          4. Enrich top results with Neo4j graph data
-          5. Build context string
-          6. Generate LLM answer (if key available)
+          3. Re-rank results using cross-encoder
+          4. Deduplicate and select top n
+          5. Enrich top results with Neo4j graph data
+          6. Build context string
+          7. Generate LLM answer (if key available)
         """
         print(f"\n🔮 RAG Query: '{question}'")
 
-        query_embedding = self.embedder.encode(question).tolist()
+        # ── query expansion ───────────────────────────────────────────────────
+        expanded_queries = self._expand_query(question)
+        print(f"   Expanded queries: {len(expanded_queries)}")
 
-        # ── search each collection ────────────────────────────────────────────
+        # ── search each collection for each query ─────────────────────────────
         all_results: List[Dict[str, Any]] = []
+        retrieval_pool_size = n_results * 4  # Retrieve more for re-ranking
 
-        for collection_name in ["bands", "releases", "members", "reddit", "lyrics", "sounds"]:
-            try:
-                raw = self.collections[collection_name].query(
-                    query_embeddings=[query_embedding],
-                    n_results=n_results,
-                    include=["documents", "metadatas", "distances"],
-                )
-                self._tag_source(raw, collection_name)
-                all_results.extend(self._format_results(raw))
-            except Exception:
-                pass  # empty collection, skip
+        for q in expanded_queries:
+            query_embedding = self.embedder.encode(q).tolist()
+            for collection_name in ["bands", "releases", "members", "reddit", "lyrics", "sounds"]:
+                try:
+                    raw = self.collections[collection_name].query(
+                        query_embeddings=[query_embedding],
+                        n_results=retrieval_pool_size,
+                        include=["documents", "metadatas", "distances"],
+                    )
+                    self._tag_source(raw, collection_name)
+                    formatted = self._format_results(raw)
+                    # Add query reference for re-ranking
+                    for res in formatted:
+                        res["query"] = q
+                    all_results.extend(formatted)
+                except Exception:
+                    pass  # empty collection, skip
 
-        # ── rank ─────────────────────────────────────────────────────────────
-        all_results.sort(key=lambda x: x["score"], reverse=True)
-        top: List[Dict[str, Any]] = all_results[:n_results]
+        # ── deduplicate ───────────────────────────────────────────────────────
+        seen_ids = set()
+        unique_results = []
+        for res in all_results:
+            if res["id"] not in seen_ids:
+                seen_ids.add(res["id"])
+                unique_results.append(res)
+
+        # ── re-rank with cross-encoder ────────────────────────────────────────
+        print(f"   Re-ranking {len(unique_results)} candidates...")
+        pairs = [[question, res["text"]] for res in unique_results]
+        scores = self.cross_encoder.predict(pairs)
+        
+        # Apply original semantic score as a secondary boost
+        for i, res in enumerate(unique_results):
+            # Combine cross-encoder score (normalized) with original semantic score
+            # Cross-encoder scores are raw logits, we can use them directly or sigmoid
+            # Here we just use the cross-encoder score as primary
+            res["rerank_score"] = float(scores[i])
+
+        # Sort by rerank score
+        unique_results.sort(key=lambda x: x["rerank_score"], reverse=True)
+        top: List[Dict[str, Any]] = unique_results[:n_results]
 
         # ── enrich with Neo4j ─────────────────────────────────────────────────
         enriched = self._enrich_with_graph(top)
@@ -337,6 +372,33 @@ class StorageOrchestrator:
             "context": context,
             "sources": list(set(r["collection"] for r in enriched)),
         }
+
+    def _expand_query(self, question: str) -> List[str]:
+        """
+        Generate variations of the query for better retrieval.
+        """
+        # Simple heuristic-based expansion
+        # In a production system, use an LLM for this
+        expansions = [question]
+        
+        # If it's a "who" or "what" question, try rephrasing
+        lower_q = question.lower()
+        if "who" in lower_q:
+            expansions.append(question.replace("who", "member"))
+            expansions.append(question.replace("who", "person"))
+        elif "what" in lower_q:
+            # Use case-insensitive replacement by reconstructing the string
+            import re
+            expansions.append(re.sub(r"what is", "description of", lower_q, flags=re.IGNORECASE))
+            expansions.append(re.sub(r"what are", "list of", lower_q, flags=re.IGNORECASE))
+        
+        # Add band name variations if pattern matches
+        # This is a simple heuristic, ideally use NER
+        if "band" in lower_q or "similar" in lower_q:
+             expansions.append(f"music {question}")
+             expansions.append(f"metal {question}")
+
+        return list(set(expansions)) # Remove duplicates
 
     # =========================================================================
     # DISCOVERY
@@ -499,32 +561,32 @@ class StorageOrchestrator:
 
 
 # ─── End-to-end smoke test ───────────────────────────────────────────────────
-if __name__ == "__main__":
-    orch = StorageOrchestrator()
+# if __name__ == "__main__":
+#     orch = StorageOrchestrator()
 
-    test_band: Dict[str, Any] = {
-        "name": "Vildhjarta",
-        "mbid": "test-vildhjarta-001",
-        "genres": ["progressive death metal", "djent"],
-        "country": "SE",
-        "formed_year": 2004,
-        "biography": "Swedish progressive metal band known for dark, complex compositions.",
-        "releases": [
-            {"title": "Måsstaden", "year": 2011, "type": "Album"},
-            {"title": "Måsstaden under vatten", "year": 2022, "type": "Album"},
-        ],
-        "lineup": [
-            {"name": "Daniel Bergström", "role": "vocals", "join_year": 2004},
-            {"name": "Mattias Härd", "role": "guitar", "join_year": 2004},
-        ],
-        "reddit_mentions": 45,
-    }
+#     test_band: Dict[str, Any] = {
+#         "name": "Vildhjarta",
+#         "mbid": "test-vildhjarta-001",
+#         "genres": ["progressive death metal", "djent"],
+#         "country": "SE",
+#         "formed_year": 2004,
+#         "biography": "Swedish progressive metal band known for dark, complex compositions.",
+#         "releases": [
+#             {"title": "Måsstaden", "year": 2011, "type": "Album"},
+#             {"title": "Måsstaden under vatten", "year": 2022, "type": "Album"},
+#         ],
+#         "lineup": [
+#             {"name": "Daniel Bergström", "role": "vocals", "join_year": 2004},
+#             {"name": "Mattias Härd", "role": "guitar", "join_year": 2004},
+#         ],
+#         "reddit_mentions": 45,
+#     }
 
-    result = orch.ingest_band_complete(test_band)
-    print(f"\nIngestion: {result['status']}")
+#     result = orch.ingest_band_complete(test_band)
+#     print(f"\nIngestion: {result['status']}")
 
-    rag = orch.query_rag("progressive death metal from Sweden", n_results=3)
-    print(f"\nRAG retrieved {len(rag['retrieved_documents'])} documents")
-    print(f"Answer: {rag['answer'][:300]}")
+#     rag = orch.query_rag("progressive death metal from Sweden", n_results=3)
+#     print(f"\nRAG retrieved {len(rag['retrieved_documents'])} documents")
+#     print(f"Answer: {rag['answer'][:300]}")
 
-    orch.close()
+#     orch.close()

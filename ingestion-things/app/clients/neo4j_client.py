@@ -73,6 +73,21 @@ class Neo4jClient:
             result = session.run(query)
             return [dict(record) for record in result]
 
+    def get_counts(self) -> Dict:
+        """Return total counts of all entities in the graph."""
+        queries = {
+            "bands": "MATCH (b:Band) RETURN count(b) as count",
+            "releases": "MATCH (r:Release) RETURN count(r) as count",
+            "members": "MATCH (m:Musician) RETURN count(m) as count",
+            "genres": "MATCH (g:Genre) RETURN count(g) as count",
+        }
+        with self.driver.session() as session:
+            result = {}
+            for key, query in queries.items():
+                res = session.run(query)
+                result[key] = res.single()["count"]
+            return result
+
     # =========================================================================
     # MEMBERS
     # =========================================================================
