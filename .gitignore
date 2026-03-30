@@ -16,3 +16,4 @@ env/
 .aider*
 
 
+*.json
