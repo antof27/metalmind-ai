@@ -14,5 +14,3 @@ env/
 # macOS
 .DS_Store
 .aider*
-
-*.json

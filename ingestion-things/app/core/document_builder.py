@@ -41,7 +41,7 @@ class DocumentBuilder:
             text_parts.append(f"Formed in {formed}, currently {status}.")
         
         if bio:
-            text_parts.append(f"Biography: {bio[:1000]}")
+            text_parts.append(f"Biography: {bio[:500]}")
         
         if releases:
             release_names = [a.get("title") for a in releases[:10]]
@@ -233,7 +233,7 @@ class DocumentBuilder:
 
             title = track.get("title", "Unknown")
             text = (
-                f"{band_name} — \"{title}\" lyrics:\n{lyrics}"
+                f"{band_name} \u2014 \"{title}\" lyrics:\n{lyrics}"
             )
 
             doc = {
