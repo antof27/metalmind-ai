@@ -30,7 +30,15 @@ class StorageOrchestrator:
 
         # ── databases ────────────────────────────────────────────────────────
         self.chroma = ChromaClientLocal()
-        self.neo4j = Neo4jClient()
+        
+        try:
+            self.neo4j = Neo4jClient()
+            self._neo4j_available = True
+            print("🕸️ Neo4j connected")
+        except Exception as e:
+            self._neo4j_available = False
+            self.neo4j = None
+            print(f"⚠️ Neo4j unavailable (skipping): {e}")
 
         # Document builder
         self.builder = DocumentBuilder()
@@ -247,25 +255,28 @@ class StorageOrchestrator:
                     band_data["chroma_doc_id"] = doc["id"]
 
             # ── 3. STORE IN NEO4J ────────────────────────────────────────────
-            print("   🕸️  Building graph...")
+            if self._neo4j_available:
+                print("   🕸️  Building graph...")
 
-            neo4j_band_id = self.neo4j.create_band(band_data)
-            result["neo4j_ids"].append({"type": "band", "id": neo4j_band_id})
+                neo4j_band_id = self.neo4j.create_band(band_data)
+                result["neo4j_ids"].append({"type": "band", "id": neo4j_band_id})
 
-            for member in band_data.get("lineup", []):
-                mid = self.neo4j.create_member(
-                    band_data.get("mbid"),
-                    {"name": member["name"], "role": member.get("role", "member")},
-                )
-                result["neo4j_ids"].append({"type": "member", "name": member["name"], "id": mid})
+                for member in band_data.get("lineup", []):
+                    mid = self.neo4j.create_member(
+                        band_data.get("mbid"),
+                        {"name": member["name"], "role": member.get("role", "member")},
+                    )
+                    result["neo4j_ids"].append({"type": "member", "name": member["name"], "id": mid})
 
-            for release in band_data.get("releases", []):
-                aid = self.neo4j.create_release(band_data.get("mbid"), release)
-                if aid:
-                    result["neo4j_ids"].append({"type": "release", "title": release.get("title"), "id": aid})
+                for release in band_data.get("releases", []):
+                    aid = self.neo4j.create_release(band_data.get("mbid"), release)
+                    if aid:
+                        result["neo4j_ids"].append({"type": "release", "title": release.get("title"), "id": aid})
 
-            for genre in band_data.get("genres", []):
-                self.neo4j.connect_genre(band_data.get("mbid"), genre)
+                for genre in band_data.get("genres", []):
+                    self.neo4j.connect_genre(band_data.get("mbid"), genre)
+            else:
+                print("   ⚠️  Neo4j unavailable, skipping graph ingestion")
 
             result["status"] = "success"
             print(f"   ✅ Done: {len(result['chroma_ids'])} vectors, "
@@ -429,7 +440,11 @@ class StorageOrchestrator:
         Graph-first: Neo4j filters by country/year → Chroma returns metadata.
         Falls back to in-memory filter if no graph data.
         """
-        graph_bands = self.neo4j.get_scene_bands(country, year_start, year_end)
+        graph_bands = []
+        if self._neo4j_available:
+            graph_bands = self.neo4j.get_scene_bands(country, year_start, year_end)
+        else:
+            print("⚠️ Scene discovery requires Neo4j")
 
         results = []
         for band in graph_bands:
@@ -450,13 +465,17 @@ class StorageOrchestrator:
 
     def get_stats(self) -> Dict:
         """Database document / node counts."""
-        return {
+        stats = {
             "chroma": self.chroma.get_stats(),
-            "neo4j": {"bands": len(self.neo4j.get_all_bands()), "status": "connected"},
+            "neo4j": {"status": "disconnected"}
         }
+        if self._neo4j_available:
+            stats["neo4j"] = {"bands": len(self.neo4j.get_all_bands()), "status": "connected"}
+        return stats
 
     def close(self):
-        self.neo4j.close()
+        if self._neo4j_available:
+            self.neo4j.close()
         print("👋 Storage orchestrator closed")
 
     # =========================================================================
@@ -519,6 +538,9 @@ class StorageOrchestrator:
 
     def _enrich_with_graph(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Add Neo4j member and property data to Chroma search results."""
+        if not self._neo4j_available:
+            return results
+            
         enriched = []
         for result in results:
             meta = result.get("metadata", {})
